@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Nexus AI</title>
+    <style>
+        html, body {
+            height: 100%; margin: 0;
+            background: #1a1a1a; 
+            color: #fff;
+            font-family: 'Inter', ui-sans-serif, system-ui, Arial, sans-serif;
+            overflow: hidden; user-select: none;
+        }
+        body { width: 100vw; height: 100vh; position: relative; min-height: 100vh; }
+
+        .top-bar, .conversation-log {
+            display: none;
+        }
+        
+        #canvas-blob {
+            display: block; position: absolute; left: 50%; top: 50%;
+            transform: translate(-50%, -50%);
+            width: 500px; height: 500px;
+            max-width: 90vw; max-height: 70vh;
+            z-index: 10;
+            background: transparent; pointer-events: none;
+        }
+
+        .controls {
+            position: absolute; left: 0; right: 0; bottom: 50px;
+            display: flex; justify-content: center; align-items: center;
+            gap: 20px;
+            z-index: 33; pointer-events: none;
+        }
+        .controls .button {
+            width: 64px; height: 64px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(8px);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; outline: none;
+            font-size: 1.75rem; color: #e5e7eb;
+            transition: all 0.2s; pointer-events: all;
+        }
+        .controls .button:hover {
+            background: rgba(0, 0, 0, 0.5);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+        #micButton.listening {
+            background: rgba(220, 38, 38, 0.4); 
+            border-color: rgba(239, 68, 68, 0.6);
+        }
+        
+        @media (max-width: 600px) {
+            #canvas-blob { width: 90vw; height: 90vw; }
+            .controls { bottom: 40px; }
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas-blob"></canvas>
+    
+    <div class="controls">
+        <button class="button" id="closeButton" title="New Chat"><span>&#8634;</span></button>
+        <button class="button" id="micButton" title="Speak"><span>&#127908;</span></button>
+    </div>
+    
+    <script>
+        const micButton = document.getElementById('micButton');
+        const closeButton = document.getElementById('closeButton'); // Get the close button
+        let voiceVolume = 0;
+        let recognition;
+        let isListening = false;
+        
+        async function initAudioVisualizer() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const audioContext = new AudioContext();
+                const analyser = audioContext.createAnalyser();
+                const source = audioContext.createMediaStreamSource(stream);
+                source.connect(analyser);
+                analyser.fftSize = 32;
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+                function updateVisualization() {
+                    if (isListening) {
+                        analyser.getByteFrequencyData(dataArray);
+                        let sum = dataArray.reduce((a, b) => a + b, 0);
+                        voiceVolume = (sum / dataArray.length) / 128.0;
+                    } else {
+                        voiceVolume = 0;
+                    }
+                    requestAnimationFrame(updateVisualization);
+                }
+                updateVisualization();
+            } catch (err) {
+                console.error("Microphone access denied for visualizer:", err);
+            }
+        }
+        
+        const canvas = document.getElementById('canvas-blob');
+        const ctx = canvas.getContext('2d');
+        let w = canvas.width = canvas.offsetWidth;
+        let h = canvas.height = canvas.offsetHeight;
+        let t = 0;
+        const DOTS = 500;
+
+        function drawSphere() {
+            ctx.clearRect(0, 0, w, h);
+            const r = Math.min(w, h) / 2.5;
+            const cx = w / 2, cy = h / 2;
+            t += 0.01;
+
+            for(let i = 0; i < DOTS; ++i) {
+                const phi = Math.acos(1 - 2 * (i + 0.5) / DOTS);
+                const theta = Math.PI * (1 + Math.sqrt(5)) * (i + 0.5);
+                
+                const breath = 8 * Math.sin(t + i * 0.2);
+                const pulse = (isListening ? voiceVolume * 60 : 0);
+                const rr = r + breath + pulse;
+                
+                const rot = t * 0.2;
+                const x = rr * Math.sin(phi) * Math.cos(theta + rot);
+                const y = rr * Math.sin(phi) * Math.sin(theta + rot);
+                const z = rr * Math.cos(phi);
+
+                const scale = (z + rr) / (2 * rr);
+                const size = scale * 2.5 + 0.5;
+                
+                ctx.beginPath();
+                ctx.globalAlpha = scale * 0.8 + 0.1;
+                ctx.arc(cx + x, cy + y, size, 0, Math.PI * 2);
+
+                const intensity = Math.max(0, Math.min(1, scale * 1.5 - 0.2));
+                const redValue = Math.round(150 + 105 * intensity); 
+                const greenValue = Math.round(20 * intensity);
+                const blueValue = Math.round(40 * intensity);
+
+                ctx.fillStyle = `rgb(${redValue}, ${greenValue}, ${blueValue})`;
+                ctx.shadowColor = `rgb(${redValue}, 50, 50)`;
+                ctx.shadowBlur = 4;
+                
+                ctx.fill();
+            }
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = 1;
+            requestAnimationFrame(drawSphere);
+        }
+        window.addEventListener('resize', () => { w = canvas.width = canvas.offsetWidth; h = canvas.height = canvas.offsetHeight; });
+        drawSphere();
+        
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+
+            recognition.onstart = () => { isListening = true; micButton.classList.add('listening'); };
+            recognition.onend = () => { isListening = false; micButton.classList.remove('listening'); };
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                sendToServer(transcript);
+            };
+        }
+
+        micButton.addEventListener('click', () => {
+            if (isListening) {
+                recognition.stop();
+            } else {
+                if(recognition) recognition.start();
+            }
+        });
+
+        async function resetChat() {
+            try {
+                speechSynthesis.cancel(); 
+                const response = await fetch('/reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log(data.message);
+                } else {
+                    console.error('Failed to reset chat on the server.');
+                    speak("Sorry, I could not start a new session.");
+                }
+            } catch (error) {
+                console.error('Error resetting chat:', error);
+                speak("I seem to be having trouble resetting.");
+            }
+        }
+
+        closeButton.addEventListener('click', resetChat);
+        
+        async function sendToServer(text) {
+            try {
+                const response = await fetch('/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question: text }),
+                });
+                const data = await response.json();
+                speak(data.answer);
+            } catch (error) {
+                speak("Sorry, I could not connect.");
+            }
+        }
+        
+        function speak(text) {
+            const utterance = new SpeechSynthesisUtterance(text);
+            speechSynthesis.speak(utterance);
+        }
+        
+        initAudioVisualizer();
+    </script>
+</body>
+</html>
